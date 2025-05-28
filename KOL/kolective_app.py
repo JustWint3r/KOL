@@ -34,86 +34,84 @@ def clean_text(text):
     return str(text).strip().replace('\n', ' ')
 
 def normalize_name(name):
-    """Normalize name for comparison by keeping only alphanumeric and Chinese characters."""
+    """Normalize name for comparison by handling mixed-language names carefully."""
     if pd.isna(name):
         return ""
     
     # Convert to lowercase and remove extra spaces
-    name = str(name).lower().strip()
+    name = str(name).strip()
     
-    # Split into Chinese and non-Chinese parts
-    chinese_chars = ''.join(char for char in name if '\u4e00' <= char <= '\u9fff')
-    non_chinese = ''.join(char for char in name if not '\u4e00' <= char <= '\u9fff')
+    # Create two versions: one with spaces and one without
+    spaced_version = ' '.join(name.split())  # Normalize spaces
+    no_space_version = ''.join(name.split())  # Remove all spaces
     
-    # Clean up non-Chinese part
-    non_chinese = re.sub(r'[^a-z0-9]', '', non_chinese)
-    
-    # Combine both parts
-    normalized = non_chinese + chinese_chars
-    logger.debug(f"Normalized '{name}' to '{normalized}'")
-    return normalized
+    return (spaced_version, no_space_version)
 
 def find_matching_photo(kol_name, photo_files, original_files, used_photos):
     """Find the best matching photo for a KOL name."""
-    normalized_kol_name = normalize_name(kol_name)
+    kol_spaced, kol_no_space = normalize_name(kol_name)
     logger.info(f"\nMatching process for KOL: '{kol_name}'")
-    logger.info(f"Normalized KOL name: '{normalized_kol_name}'")
+    logger.info(f"Normalized versions - Spaced: '{kol_spaced}', No space: '{kol_no_space}'")
     
-    # Try exact match first
-    for photo_name, original_name in original_files.items():
-        if original_name in used_photos:
-            continue
-            
-        normalized_photo = normalize_name(photo_name)
-        if normalized_kol_name == normalized_photo:
-            logger.info(f"✓ Found exact match: '{original_name}'")
-            return original_name
+    # First try: Exact match with original filename (case-sensitive)
+    for filename in original_files.values():
+        if filename not in used_photos:
+            base_name = os.path.splitext(filename)[0]
+            if kol_name == base_name or kol_spaced == base_name or kol_no_space == base_name:
+                logger.info(f"✓ Found exact case-sensitive match: '{filename}'")
+                return filename
     
-    # Try partial matches
+    # Second try: Case-insensitive exact match
+    for filename in original_files.values():
+        if filename not in used_photos:
+            base_name = os.path.splitext(filename)[0]
+            if kol_name.lower() == base_name.lower() or \
+               kol_spaced.lower() == base_name.lower() or \
+               kol_no_space.lower() == base_name.lower():
+                logger.info(f"✓ Found case-insensitive match: '{filename}'")
+                return filename
+    
+    # Third try: Partial match for mixed-language names
     best_match = None
     best_match_score = 0
     
-    for photo_name, original_name in original_files.items():
-        if original_name in used_photos:
+    for filename in original_files.values():
+        if filename in used_photos:
             continue
             
-        normalized_photo = normalize_name(photo_name)
+        base_name = os.path.splitext(filename)[0]
+        file_spaced, file_no_space = normalize_name(base_name)
         
-        # Calculate match scores for Chinese and non-Chinese parts separately
-        chinese_kol = ''.join(char for char in normalized_kol_name if '\u4e00' <= char <= '\u9fff')
-        non_chinese_kol = ''.join(char for char in normalized_kol_name if not '\u4e00' <= char <= '\u9fff')
+        # Check if both names contain Chinese characters
+        kol_has_chinese = any('\u4e00' <= char <= '\u9fff' for char in kol_name)
+        file_has_chinese = any('\u4e00' <= char <= '\u9fff' for char in base_name)
         
-        chinese_photo = ''.join(char for char in normalized_photo if '\u4e00' <= char <= '\u9fff')
-        non_chinese_photo = ''.join(char for char in normalized_photo if not '\u4e00' <= char <= '\u9fff')
+        # If one has Chinese and the other doesn't, skip
+        if kol_has_chinese != file_has_chinese:
+            continue
         
-        # Calculate Chinese match score
-        if chinese_kol and chinese_photo:
-            chinese_score = 1.0 if chinese_kol == chinese_photo else 0.0
+        # Calculate match score
+        score = 0
+        if kol_has_chinese:
+            # For Chinese names, require exact match of Chinese characters
+            kol_chinese = ''.join(char for char in kol_name if '\u4e00' <= char <= '\u9fff')
+            file_chinese = ''.join(char for char in base_name if '\u4e00' <= char <= '\u9fff')
+            if kol_chinese == file_chinese:
+                score = 1.0
         else:
-            chinese_score = 1.0  # If neither has Chinese characters, consider it a match
-            
-        # Calculate non-Chinese match score
-        if non_chinese_kol and non_chinese_photo:
-            common_chars = sum(1 for c in non_chinese_kol if c in non_chinese_photo)
-            non_chinese_score = common_chars / max(len(non_chinese_kol), len(non_chinese_photo))
-        else:
-            non_chinese_score = 1.0 if not non_chinese_kol and not non_chinese_photo else 0.0
-            
-        # Combined score with higher weight for Chinese match
-        match_score = (chinese_score * 0.6) + (non_chinese_score * 0.4)
+            # For non-Chinese names, use string similarity
+            score = max(
+                len(set(kol_no_space.lower()) & set(file_no_space.lower())) / max(len(kol_no_space), len(file_no_space)),
+                len(set(kol_spaced.lower()) & set(file_spaced.lower())) / max(len(kol_spaced), len(file_spaced))
+            )
         
-        logger.debug(f"Match scores for '{original_name}':")
-        logger.debug(f"  Chinese score: {chinese_score:.2f}")
-        logger.debug(f"  Non-Chinese score: {non_chinese_score:.2f}")
-        logger.debug(f"  Combined score: {match_score:.2f}")
-        
-        # Update best match if this score is higher
-        if match_score > best_match_score and match_score > 0.7:  # Require at least 70% match
-            best_match = original_name
-            best_match_score = match_score
+        if score > best_match_score and score >= 0.8:  # Require 80% match
+            best_match = filename
+            best_match_score = score
+            logger.debug(f"New best match: '{filename}' with score {score:.2f}")
 
     if best_match:
-        logger.info(f"✓ Found partial match: '{best_match}' (score: {best_match_score:.2f})")
+        logger.info(f"✓ Found best match: '{best_match}' (score: {best_match_score:.2f})")
         return best_match
 
     logger.warning(f"✗ No match found for '{kol_name}'")
@@ -180,11 +178,11 @@ def api_kols():
             file_ext = os.path.splitext(filename)[1].lower()
             if file_ext in valid_extensions:
                 base_name = os.path.splitext(filename)[0]
-                normalized_name = normalize_name(base_name)
-                if normalized_name:  # Only add if name is not empty after normalization
-                    photo_files[normalized_name] = normalized_name
-                    original_files[normalized_name] = filename
-                    logger.info(f"Indexed image: '{filename}' -> '{normalized_name}'")
+                spaced_name, no_space_name = normalize_name(base_name)
+                if spaced_name:  # Only add if name is not empty after normalization
+                    photo_files[no_space_name] = filename
+                    original_files[spaced_name] = filename
+                    logger.info(f"Indexed image: '{filename}' -> '{spaced_name}' / '{no_space_name}'")
         
         logger.info(f"Successfully indexed {len(photo_files)} valid PNG images")
     except Exception as e:
