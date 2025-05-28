@@ -46,33 +46,22 @@ def normalize_name(name):
     return name
 
 def find_matching_photo(kol_name, photo_files):
-    """Find the best matching photo for a KOL name."""
+    """Find the matching photo using exact string matching."""
     logger.info(f"\n=== Matching process for KOL: '{kol_name}' ===")
     
-    # Get the base name without extension
-    normalized_kol = normalize_name(kol_name)
-    logger.info(f"Normalized KOL name: '{normalized_kol}'")
+    # Try exact match first
+    exact_match = f"{kol_name}.png"
+    logger.info(f"Looking for exact match: '{exact_match}'")
     
-    # Log all available files for debugging
-    logger.info("Available files:")
+    if exact_match in photo_files:
+        logger.info(f"✓ Found exact match: '{exact_match}'")
+        return exact_match
+        
+    # If no exact match, log all files for debugging
+    logger.info("No exact match found. Available files:")
     for f in photo_files:
         logger.info(f"  {f}")
     
-    # First try: Direct match with the filename
-    for filename in photo_files:
-        base_name = os.path.splitext(filename)[0]
-        logger.info(f"Comparing with: '{base_name}'")
-        
-        if normalize_name(base_name) == normalized_kol:
-            logger.info(f"✓ Found exact match: '{filename}'")
-            return filename
-            
-        # Try without spaces
-        if normalize_name(base_name).replace(' ', '') == normalized_kol.replace(' ', ''):
-            logger.info(f"✓ Found match (no spaces): '{filename}'")
-            return filename
-    
-    # No match found
     logger.warning(f"✗ No match found for '{kol_name}'")
     return None
 
@@ -89,20 +78,19 @@ def api_kols():
     try:
         df = pd.read_excel(excel_path, engine='openpyxl')
         logger.info(f"Successfully read Excel file with {len(df)} rows")
-        logger.info(f"Column names: {df.columns.tolist()}")
         
         # Log first few KOL names for debugging
         logger.info("First few KOL names from Excel:")
-        for idx, name in enumerate(df['KOL Nickname'].head()):
-            logger.info(f"  {idx + 1}. {name}")
+        for idx, name in enumerate(df['KOL Nickname'].head(10)):
+            logger.info(f"  {idx + 1}. '{name}'")
     except Exception as e:
         logger.error(f"Error reading Excel: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
     df.columns = df.columns.str.strip()
     
-    # Clean the data
-    df['KOL Nickname'] = df['KOL Nickname'].apply(clean_text)
+    # Clean the data - only remove leading/trailing whitespace
+    df['KOL Nickname'] = df['KOL Nickname'].str.strip()
     df['Followers'] = df['Followers'].apply(parse_followers)
     df['Engagement Rate'] = df['Engagement Rate'].fillna("N/A")
 
@@ -115,8 +103,8 @@ def api_kols():
         
         # Log all image files for debugging
         logger.info("All available image files:")
-        for f in photo_files:
-            logger.info(f"  {f}")
+        for f in sorted(photo_files):
+            logger.info(f"  '{f}'")
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
         return jsonify({"error": str(e)}), 500
@@ -127,7 +115,8 @@ def api_kols():
     kols = []
     for _, row in df.iterrows():
         kol_nickname = row['KOL Nickname']
-        photo_file = find_matching_photo(kol_nickname, [f for f in photo_files if f not in used_photos])
+        available_photos = [f for f in photo_files if f not in used_photos]
+        photo_file = find_matching_photo(kol_nickname, available_photos)
         
         if photo_file:
             photo_url = f'/static/KOL_Picture/{urllib.parse.quote(photo_file)}'
