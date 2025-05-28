@@ -8,7 +8,10 @@ import logging
 app = Flask(__name__)
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s'
+)
 logger = logging.getLogger(__name__)
 
 def parse_followers(value):
@@ -31,32 +34,33 @@ def clean_text(text):
     return str(text).strip().replace('\n', ' ')
 
 def normalize_name(name):
-    """Normalize name for comparison."""
+    """Normalize name for comparison by keeping only alphanumeric characters."""
     if pd.isna(name):
         return ""
-    # Convert to lowercase and remove extra spaces
-    name = str(name).lower().strip()
-    # Remove special characters but preserve Chinese characters and emojis
-    name = re.sub(r'[^\w\s\u4e00-\u9fff\U0001F300-\U0001F9FF]', '', name)
+    # Convert to lowercase
+    name = str(name).lower()
+    # Remove all special characters and extra spaces, keep only letters and numbers
+    name = re.sub(r'[^a-z0-9]', '', name)
     return name
 
-def find_matching_photo(normalized_name, photo_files):
+def find_matching_photo(kol_name, photo_files, original_files):
     """Find the best matching photo for a KOL name."""
-    if normalized_name in photo_files:
-        return photo_files[normalized_name]
-    
+    normalized_kol_name = normalize_name(kol_name)
+    logger.info(f"Looking for match for KOL: {kol_name} (normalized: {normalized_kol_name})")
+
+    # Direct match first
+    if normalized_kol_name in photo_files:
+        logger.info(f"Found direct match for {kol_name}")
+        return original_files[normalized_kol_name]
+
     # Try partial matching
-    for photo_name, file in photo_files.items():
-        # Check if either name contains the other
-        if normalized_name in photo_name or photo_name in normalized_name:
-            return file
-        
-        # Split names into words and check for word matches
-        name_words = set(normalized_name.split())
-        photo_words = set(photo_name.split())
-        if len(name_words.intersection(photo_words)) >= min(len(name_words), len(photo_words)) / 2:
-            return file
-    
+    for photo_name, original_name in original_files.items():
+        # If the normalized names contain each other
+        if normalized_kol_name in photo_name or photo_name in normalized_kol_name:
+            logger.info(f"Found partial match: {kol_name} -> {original_name}")
+            return original_name
+
+    logger.warning(f"No match found for {kol_name}")
     return None
 
 @app.route('/')
@@ -102,31 +106,41 @@ def api_kols():
             df[col] = df[col].apply(clean_text)
 
     photo_dir = os.path.join(base_dir, 'static', 'KOL_Picture')
-    photo_files = {}
+    photo_files = {}  # Normalized names to normalized filenames
+    original_files = {}  # Normalized names to original filenames
     valid_extensions = {'.jpg', '.jpeg', '.png'}
     
     try:
-        for f in os.listdir(photo_dir):
-            file_ext = os.path.splitext(f)[1].lower()
+        logger.info(f"Scanning directory: {photo_dir}")
+        files_list = os.listdir(photo_dir)
+        logger.info(f"Found {len(files_list)} total files")
+        
+        for filename in files_list:
+            file_ext = os.path.splitext(filename)[1].lower()
             if file_ext in valid_extensions:
-                normalized_name = normalize_name(os.path.splitext(f)[0])
-                photo_files[normalized_name] = f
-                logger.info(f"Found image: {f} -> {normalized_name}")
+                base_name = os.path.splitext(filename)[0]
+                normalized_name = normalize_name(base_name)
+                if normalized_name:  # Only add if name is not empty after normalization
+                    photo_files[normalized_name] = normalized_name
+                    original_files[normalized_name] = filename
+                    logger.info(f"Indexed image: {filename} -> {normalized_name}")
+        
+        logger.info(f"Indexed {len(photo_files)} valid images")
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
         return jsonify({"error": f"Failed to read photo directory: {str(e)}"}), 500
 
     kols = []
     for _, row in df.iterrows():
-        name = normalize_name(row['KOL Nickname'])
-        photo_file = find_matching_photo(name, photo_files)
+        kol_nickname = row['KOL Nickname']
+        photo_file = find_matching_photo(kol_nickname, photo_files, original_files)
         
         if photo_file:
             photo_url = f'/static/KOL_Picture/{urllib.parse.quote(photo_file)}'
-            logger.info(f"Matched {row['KOL Nickname']} -> {photo_file}")
+            logger.info(f"Successfully matched {kol_nickname} -> {photo_file}")
         else:
             photo_url = 'https://via.placeholder.com/300x400?text=No+Photo'
-            logger.warning(f"No photo found for: {row['KOL Nickname']}")
+            logger.warning(f"No photo found for: {kol_nickname}")
         
         kol = row.to_dict()
         kol['Photo'] = photo_url
