@@ -104,8 +104,8 @@ def api_kols():
 
         # Read all files from KOL_Picture directory
         photo_dir = os.path.join(base_dir, 'static', 'KOL_Picture')
-        photo_files = [f for f in os.listdir(photo_dir) if f.lower().endswith('.png')]
-        logger.info(f"\nFound {len(photo_files)} PNG files in {photo_dir}")
+        photo_files = [f for f in os.listdir(photo_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+        logger.info(f"\nFound {len(photo_files)} image files in {photo_dir}")
         
         # Log all files for debugging
         logger.info("\nAll available files:")
