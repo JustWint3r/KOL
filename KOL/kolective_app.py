@@ -39,28 +39,77 @@ def normalize_name(name):
         return ""
     # Convert to lowercase
     name = str(name).lower()
-    # Remove all special characters and extra spaces, keep only letters and numbers
+    # Special handling for Chinese characters
+    if any('\u4e00' <= char <= '\u9fff' for char in name):
+        # For Chinese names, keep the characters as is
+        return name
+    # For non-Chinese names, only keep alphanumeric
     name = re.sub(r'[^a-z0-9]', '', name)
+    logger.debug(f"Normalized name: '{name}'")
     return name
 
-def find_matching_photo(kol_name, photo_files, original_files):
+def find_matching_photo(kol_name, photo_files, original_files, used_photos):
     """Find the best matching photo for a KOL name."""
     normalized_kol_name = normalize_name(kol_name)
-    logger.info(f"Looking for match for KOL: {kol_name} (normalized: {normalized_kol_name})")
-
-    # Direct match first
+    logger.info(f"\nMatching process for KOL: '{kol_name}'")
+    logger.info(f"Normalized KOL name: '{normalized_kol_name}'")
+    
+    # Check if name contains Chinese characters
+    has_chinese = any('\u4e00' <= char <= '\u9fff' for char in kol_name)
+    
+    # For Chinese names, require exact matches
+    if has_chinese:
+        # Look for exact matches only
+        for photo_name, original_name in original_files.items():
+            if original_name in used_photos:
+                continue
+            if normalized_kol_name == normalize_name(photo_name):
+                logger.info(f"✓ Found exact Chinese name match: '{original_name}'")
+                return original_name
+        logger.warning(f"✗ No exact match found for Chinese name: '{kol_name}'")
+        return None
+    
+    # For non-Chinese names, try exact match first
     if normalized_kol_name in photo_files:
-        logger.info(f"Found direct match for {kol_name}")
-        return original_files[normalized_kol_name]
-
-    # Try partial matching
+        matched_file = original_files[normalized_kol_name]
+        if matched_file not in used_photos:
+            logger.info(f"✓ Found exact match: '{matched_file}'")
+            return matched_file
+    
+    # Try to find the best partial match for non-Chinese names
+    best_match = None
+    best_match_score = 0
+    
     for photo_name, original_name in original_files.items():
-        # If the normalized names contain each other
-        if normalized_kol_name in photo_name or photo_name in normalized_kol_name:
-            logger.info(f"Found partial match: {kol_name} -> {original_name}")
-            return original_name
+        # Skip if photo already used
+        if original_name in used_photos:
+            continue
+            
+        # Skip if the photo name contains Chinese characters but KOL name doesn't
+        if any('\u4e00' <= char <= '\u9fff' for char in photo_name):
+            continue
+        
+        normalized_photo = normalize_name(photo_name)
+        
+        # Skip if names are too different in length
+        len_diff = abs(len(normalized_kol_name) - len(normalized_photo))
+        if len_diff > 2:  # More strict length difference
+            continue
+            
+        # Calculate match score
+        common_chars = sum(1 for c in normalized_kol_name if c in normalized_photo)
+        match_score = common_chars / max(len(normalized_kol_name), len(normalized_photo))
+        
+        # Update best match if this score is higher
+        if match_score > best_match_score and match_score > 0.8:  # Increased threshold to 80%
+            best_match = original_name
+            best_match_score = match_score
 
-    logger.warning(f"No match found for {kol_name}")
+    if best_match:
+        logger.info(f"✓ Found partial match: '{best_match}' (score: {best_match_score:.2f})")
+        return best_match
+
+    logger.warning(f"✗ No match found for '{kol_name}'")
     return None
 
 @app.route('/')
@@ -111,9 +160,14 @@ def api_kols():
     valid_extensions = {'.jpg', '.jpeg', '.png'}
     
     try:
-        logger.info(f"Scanning directory: {photo_dir}")
+        logger.info(f"\nScanning directory: {photo_dir}")
         files_list = os.listdir(photo_dir)
         logger.info(f"Found {len(files_list)} total files")
+        
+        # First, log all files found
+        logger.info("All files in directory:")
+        for f in files_list:
+            logger.info(f"  {f}")
         
         for filename in files_list:
             file_ext = os.path.splitext(filename)[1].lower()
@@ -123,25 +177,30 @@ def api_kols():
                 if normalized_name:  # Only add if name is not empty after normalization
                     photo_files[normalized_name] = normalized_name
                     original_files[normalized_name] = filename
-                    logger.info(f"Indexed image: {filename} -> {normalized_name}")
+                    logger.info(f"Indexed image: '{filename}' -> '{normalized_name}'")
         
-        logger.info(f"Indexed {len(photo_files)} valid images")
+        logger.info(f"Successfully indexed {len(photo_files)} valid images")
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
         return jsonify({"error": f"Failed to read photo directory: {str(e)}"}), 500
 
+    # Track used photos to prevent duplicates
+    used_photos = set()
+    
     kols = []
     for _, row in df.iterrows():
         kol_nickname = row['KOL Nickname']
-        photo_file = find_matching_photo(kol_nickname, photo_files, original_files)
+        photo_file = find_matching_photo(kol_nickname, photo_files, original_files, used_photos)
         
-        if photo_file:
+        if photo_file and photo_file not in used_photos:
             photo_url = f'/static/KOL_Picture/{urllib.parse.quote(photo_file)}'
-            logger.info(f"Successfully matched {kol_nickname} -> {photo_file}")
+            used_photos.add(photo_file)
+            logger.info(f"✓ Successfully matched '{kol_nickname}' -> '{photo_file}'")
         else:
+            if photo_file:
+                logger.warning(f"⚠ Photo '{photo_file}' already used - skipping for '{kol_nickname}'")
             photo_url = 'https://via.placeholder.com/300x400?text=No+Photo'
-            logger.warning(f"No photo found for: {kol_nickname}")
-        
+            
         kol = row.to_dict()
         kol['Photo'] = photo_url
         kols.append(kol)
