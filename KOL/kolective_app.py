@@ -49,18 +49,18 @@ def find_matching_photo(kol_name, photo_files):
     """Find the matching photo using exact string matching."""
     logger.info(f"\n=== Matching process for KOL: '{kol_name}' ===")
     
-    # Try exact match first
+    # Try exact match with the filename
     exact_match = f"{kol_name}.png"
     logger.info(f"Looking for exact match: '{exact_match}'")
     
     if exact_match in photo_files:
         logger.info(f"✓ Found exact match: '{exact_match}'")
         return exact_match
-        
+    
     # If no exact match, log all files for debugging
     logger.info("No exact match found. Available files:")
-    for f in photo_files:
-        logger.info(f"  {f}")
+    for f in sorted(photo_files):
+        logger.info(f"  '{f}'")
     
     logger.warning(f"✗ No match found for '{kol_name}'")
     return None
@@ -105,6 +105,14 @@ def api_kols():
         logger.info("All available image files:")
         for f in sorted(photo_files):
             logger.info(f"  '{f}'")
+            
+        # Log some example matches for verification
+        test_kols = ["Lizz Chloe 彤彤", "Maq Lai 赖铭权", "Emely Poon"]
+        logger.info("\nTesting some known KOL names:")
+        for kol in test_kols:
+            expected_file = f"{kol}.png"
+            logger.info(f"Looking for '{expected_file}' - Present: {expected_file in photo_files}")
+            
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
         return jsonify({"error": str(e)}), 500
