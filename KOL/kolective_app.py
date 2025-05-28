@@ -34,86 +34,45 @@ def clean_text(text):
     return str(text).strip().replace('\n', ' ')
 
 def normalize_name(name):
-    """Normalize name for comparison by handling mixed-language names carefully."""
+    """Normalize name for comparison."""
     if pd.isna(name):
         return ""
     
-    # Convert to lowercase and remove extra spaces
-    name = str(name).strip()
+    # Remove extra spaces and convert to lowercase
+    name = ' '.join(str(name).strip().split())
     
-    # Create two versions: one with spaces and one without
-    spaced_version = ' '.join(name.split())  # Normalize spaces
-    no_space_version = ''.join(name.split())  # Remove all spaces
-    
-    return (spaced_version, no_space_version)
+    # Log the original and normalized name
+    logger.info(f"Normalizing name: '{name}'")
+    return name
 
-def find_matching_photo(kol_name, photo_files, original_files, used_photos):
+def find_matching_photo(kol_name, photo_files):
     """Find the best matching photo for a KOL name."""
-    kol_spaced, kol_no_space = normalize_name(kol_name)
-    logger.info(f"\nMatching process for KOL: '{kol_name}'")
-    logger.info(f"Normalized versions - Spaced: '{kol_spaced}', No space: '{kol_no_space}'")
+    logger.info(f"\n=== Matching process for KOL: '{kol_name}' ===")
     
-    # First try: Exact match with original filename (case-sensitive)
-    for filename in original_files.values():
-        if filename not in used_photos:
-            base_name = os.path.splitext(filename)[0]
-            if kol_name == base_name or kol_spaced == base_name or kol_no_space == base_name:
-                logger.info(f"✓ Found exact case-sensitive match: '{filename}'")
-                return filename
+    # Get the base name without extension
+    normalized_kol = normalize_name(kol_name)
+    logger.info(f"Normalized KOL name: '{normalized_kol}'")
     
-    # Second try: Case-insensitive exact match
-    for filename in original_files.values():
-        if filename not in used_photos:
-            base_name = os.path.splitext(filename)[0]
-            if kol_name.lower() == base_name.lower() or \
-               kol_spaced.lower() == base_name.lower() or \
-               kol_no_space.lower() == base_name.lower():
-                logger.info(f"✓ Found case-insensitive match: '{filename}'")
-                return filename
+    # Log all available files for debugging
+    logger.info("Available files:")
+    for f in photo_files:
+        logger.info(f"  {f}")
     
-    # Third try: Partial match for mixed-language names
-    best_match = None
-    best_match_score = 0
-    
-    for filename in original_files.values():
-        if filename in used_photos:
-            continue
-            
+    # First try: Direct match with the filename
+    for filename in photo_files:
         base_name = os.path.splitext(filename)[0]
-        file_spaced, file_no_space = normalize_name(base_name)
+        logger.info(f"Comparing with: '{base_name}'")
         
-        # Check if both names contain Chinese characters
-        kol_has_chinese = any('\u4e00' <= char <= '\u9fff' for char in kol_name)
-        file_has_chinese = any('\u4e00' <= char <= '\u9fff' for char in base_name)
-        
-        # If one has Chinese and the other doesn't, skip
-        if kol_has_chinese != file_has_chinese:
-            continue
-        
-        # Calculate match score
-        score = 0
-        if kol_has_chinese:
-            # For Chinese names, require exact match of Chinese characters
-            kol_chinese = ''.join(char for char in kol_name if '\u4e00' <= char <= '\u9fff')
-            file_chinese = ''.join(char for char in base_name if '\u4e00' <= char <= '\u9fff')
-            if kol_chinese == file_chinese:
-                score = 1.0
-        else:
-            # For non-Chinese names, use string similarity
-            score = max(
-                len(set(kol_no_space.lower()) & set(file_no_space.lower())) / max(len(kol_no_space), len(file_no_space)),
-                len(set(kol_spaced.lower()) & set(file_spaced.lower())) / max(len(kol_spaced), len(file_spaced))
-            )
-        
-        if score > best_match_score and score >= 0.8:  # Require 80% match
-            best_match = filename
-            best_match_score = score
-            logger.debug(f"New best match: '{filename}' with score {score:.2f}")
-
-    if best_match:
-        logger.info(f"✓ Found best match: '{best_match}' (score: {best_match_score:.2f})")
-        return best_match
-
+        if normalize_name(base_name) == normalized_kol:
+            logger.info(f"✓ Found exact match: '{filename}'")
+            return filename
+            
+        # Try without spaces
+        if normalize_name(base_name).replace(' ', '') == normalized_kol.replace(' ', ''):
+            logger.info(f"✓ Found match (no spaces): '{filename}'")
+            return filename
+    
+    # No match found
     logger.warning(f"✗ No match found for '{kol_name}'")
     return None
 
@@ -129,65 +88,38 @@ def api_kols():
 
     try:
         df = pd.read_excel(excel_path, engine='openpyxl')
-    except FileNotFoundError:
-        logger.error("List.xlsx not found")
-        return jsonify({"error": "List.xlsx not found"}), 404
+        logger.info(f"Successfully read Excel file with {len(df)} rows")
+        logger.info(f"Column names: {df.columns.tolist()}")
+        
+        # Log first few KOL names for debugging
+        logger.info("First few KOL names from Excel:")
+        for idx, name in enumerate(df['KOL Nickname'].head()):
+            logger.info(f"  {idx + 1}. {name}")
     except Exception as e:
-        logger.error(f"Failed to read Excel file: {str(e)}")
-        return jsonify({"error": f"Failed to read Excel file: {str(e)}"}), 500
+        logger.error(f"Error reading Excel: {str(e)}")
+        return jsonify({"error": str(e)}), 500
 
-    logger.info(f"Excel Columns: {df.columns.tolist()}")
     df.columns = df.columns.str.strip()
-
-    required_cols = ['KOL Nickname', 'Followers', 'Engagement Rate']
-    for col in required_cols:
-        if col not in df.columns:
-            logger.error(f"Missing required column: {col}")
-            return jsonify({"error": f"Missing required column: {col}"}), 400
-
-    if df.empty:
-        return jsonify([])
-
+    
     # Clean the data
     df['KOL Nickname'] = df['KOL Nickname'].apply(clean_text)
     df['Followers'] = df['Followers'].apply(parse_followers)
     df['Engagement Rate'] = df['Engagement Rate'].fillna("N/A")
-    
-    # Clean other columns if they exist
-    optional_cols = ['Platform', 'Category', 'Location', 'Bio']
-    for col in optional_cols:
-        if col in df.columns:
-            df[col] = df[col].apply(clean_text)
 
     photo_dir = os.path.join(base_dir, 'static', 'KOL_Picture')
-    photo_files = {}  # Normalized names to normalized filenames
-    original_files = {}  # Normalized names to original filenames
-    valid_extensions = {'.png'}  # Only allow PNG files
     
     try:
-        logger.info(f"\nScanning directory: {photo_dir}")
-        files_list = os.listdir(photo_dir)
-        logger.info(f"Found {len(files_list)} total files")
+        # Get all PNG files in the directory
+        photo_files = [f for f in os.listdir(photo_dir) if f.lower().endswith('.png')]
+        logger.info(f"\nFound {len(photo_files)} PNG files in {photo_dir}")
         
-        # First, log all files found
-        logger.info("All files in directory:")
-        for f in files_list:
+        # Log all image files for debugging
+        logger.info("All available image files:")
+        for f in photo_files:
             logger.info(f"  {f}")
-        
-        for filename in files_list:
-            file_ext = os.path.splitext(filename)[1].lower()
-            if file_ext in valid_extensions:
-                base_name = os.path.splitext(filename)[0]
-                spaced_name, no_space_name = normalize_name(base_name)
-                if spaced_name:  # Only add if name is not empty after normalization
-                    photo_files[no_space_name] = filename
-                    original_files[spaced_name] = filename
-                    logger.info(f"Indexed image: '{filename}' -> '{spaced_name}' / '{no_space_name}'")
-        
-        logger.info(f"Successfully indexed {len(photo_files)} valid PNG images")
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
-        return jsonify({"error": f"Failed to read photo directory: {str(e)}"}), 500
+        return jsonify({"error": str(e)}), 500
 
     # Track used photos to prevent duplicates
     used_photos = set()
@@ -195,15 +127,13 @@ def api_kols():
     kols = []
     for _, row in df.iterrows():
         kol_nickname = row['KOL Nickname']
-        photo_file = find_matching_photo(kol_nickname, photo_files, original_files, used_photos)
+        photo_file = find_matching_photo(kol_nickname, [f for f in photo_files if f not in used_photos])
         
-        if photo_file and photo_file not in used_photos:
+        if photo_file:
             photo_url = f'/static/KOL_Picture/{urllib.parse.quote(photo_file)}'
             used_photos.add(photo_file)
             logger.info(f"✓ Successfully matched '{kol_nickname}' -> '{photo_file}'")
         else:
-            if photo_file:
-                logger.warning(f"⚠ Photo '{photo_file}' already used - skipping for '{kol_nickname}'")
             photo_url = 'https://via.placeholder.com/300x400?text=No+Photo'
             logger.warning(f"✗ No photo found for: '{kol_nickname}'")
             
