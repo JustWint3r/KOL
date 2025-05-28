@@ -35,8 +35,8 @@ def clean_text(text):
 
 def normalize_name(name):
     """Normalize name by removing extension, converting to lowercase, and trimming spaces."""
-    # Remove file extension if present
-    name = name.lower().replace('.png', '')
+    # Remove file extension and any spaces before it
+    name = name.lower().replace(' .png', '.png').replace('.png', '')
     # Remove extra spaces and trim
     return ' '.join(name.split())
 
@@ -115,9 +115,11 @@ def api_kols():
             photo_file = find_matching_photo(kol_nickname, available_photos)
             
             if photo_file:
-                photo_url = f'/static/KOL_Picture/{urllib.parse.quote(photo_file)}'
+                # Ensure proper URL encoding for the filename
+                encoded_filename = urllib.parse.quote(photo_file)
+                photo_url = f'/static/KOL_Picture/{encoded_filename}'
                 used_photos.add(photo_file)
-                logger.info(f"✓ Successfully matched '{kol_nickname}' -> '{photo_file}'")
+                logger.info(f"✓ Successfully matched '{kol_nickname}' -> '{photo_file}' -> URL: '{photo_url}'")
             else:
                 photo_url = 'https://via.placeholder.com/300x400?text=No+Photo'
                 logger.warning(f"✗ No photo found for: '{kol_nickname}'")
