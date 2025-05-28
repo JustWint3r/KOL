@@ -34,19 +34,24 @@ def clean_text(text):
     return str(text).strip().replace('\n', ' ')
 
 def normalize_name(name):
-    """Normalize name for comparison by keeping only alphanumeric characters."""
+    """Normalize name for comparison by keeping only alphanumeric and Chinese characters."""
     if pd.isna(name):
         return ""
-    # Convert to lowercase
-    name = str(name).lower()
-    # Special handling for Chinese characters
-    if any('\u4e00' <= char <= '\u9fff' for char in name):
-        # For Chinese names, keep the characters as is
-        return name
-    # For non-Chinese names, only keep alphanumeric and convert to lowercase
-    name = re.sub(r'[^a-z0-9]', '', name)
-    logger.debug(f"Normalized name: '{name}'")
-    return name
+    
+    # Convert to lowercase and remove extra spaces
+    name = str(name).lower().strip()
+    
+    # Split into Chinese and non-Chinese parts
+    chinese_chars = ''.join(char for char in name if '\u4e00' <= char <= '\u9fff')
+    non_chinese = ''.join(char for char in name if not '\u4e00' <= char <= '\u9fff')
+    
+    # Clean up non-Chinese part
+    non_chinese = re.sub(r'[^a-z0-9]', '', non_chinese)
+    
+    # Combine both parts
+    normalized = non_chinese + chinese_chars
+    logger.debug(f"Normalized '{name}' to '{normalized}'")
+    return normalized
 
 def find_matching_photo(kol_name, photo_files, original_files, used_photos):
     """Find the best matching photo for a KOL name."""
@@ -54,54 +59,56 @@ def find_matching_photo(kol_name, photo_files, original_files, used_photos):
     logger.info(f"\nMatching process for KOL: '{kol_name}'")
     logger.info(f"Normalized KOL name: '{normalized_kol_name}'")
     
-    # Check if name contains Chinese characters
-    has_chinese = any('\u4e00' <= char <= '\u9fff' for char in kol_name)
+    # Try exact match first
+    for photo_name, original_name in original_files.items():
+        if original_name in used_photos:
+            continue
+            
+        normalized_photo = normalize_name(photo_name)
+        if normalized_kol_name == normalized_photo:
+            logger.info(f"✓ Found exact match: '{original_name}'")
+            return original_name
     
-    # For Chinese names, require exact matches
-    if has_chinese:
-        # Look for exact matches only
-        for photo_name, original_name in original_files.items():
-            if original_name in used_photos:
-                continue
-            if normalized_kol_name == normalize_name(photo_name):
-                logger.info(f"✓ Found exact Chinese name match: '{original_name}'")
-                return original_name
-        logger.warning(f"✗ No exact match found for Chinese name: '{kol_name}'")
-        return None
-    
-    # For non-Chinese names, try exact match first
-    if normalized_kol_name in photo_files:
-        matched_file = original_files[normalized_kol_name]
-        if matched_file not in used_photos:
-            logger.info(f"✓ Found exact match: '{matched_file}'")
-            return matched_file
-    
-    # Try to find the best partial match for non-Chinese names
+    # Try partial matches
     best_match = None
     best_match_score = 0
     
     for photo_name, original_name in original_files.items():
-        # Skip if photo already used
         if original_name in used_photos:
             continue
             
-        # Skip if the photo name contains Chinese characters but KOL name doesn't
-        if any('\u4e00' <= char <= '\u9fff' for char in photo_name):
-            continue
-        
         normalized_photo = normalize_name(photo_name)
         
-        # Skip if names are too different in length
-        len_diff = abs(len(normalized_kol_name) - len(normalized_photo))
-        if len_diff > 2:  # More strict length difference
-            continue
+        # Calculate match scores for Chinese and non-Chinese parts separately
+        chinese_kol = ''.join(char for char in normalized_kol_name if '\u4e00' <= char <= '\u9fff')
+        non_chinese_kol = ''.join(char for char in normalized_kol_name if not '\u4e00' <= char <= '\u9fff')
+        
+        chinese_photo = ''.join(char for char in normalized_photo if '\u4e00' <= char <= '\u9fff')
+        non_chinese_photo = ''.join(char for char in normalized_photo if not '\u4e00' <= char <= '\u9fff')
+        
+        # Calculate Chinese match score
+        if chinese_kol and chinese_photo:
+            chinese_score = 1.0 if chinese_kol == chinese_photo else 0.0
+        else:
+            chinese_score = 1.0  # If neither has Chinese characters, consider it a match
             
-        # Calculate match score
-        common_chars = sum(1 for c in normalized_kol_name if c in normalized_photo)
-        match_score = common_chars / max(len(normalized_kol_name), len(normalized_photo))
+        # Calculate non-Chinese match score
+        if non_chinese_kol and non_chinese_photo:
+            common_chars = sum(1 for c in non_chinese_kol if c in non_chinese_photo)
+            non_chinese_score = common_chars / max(len(non_chinese_kol), len(non_chinese_photo))
+        else:
+            non_chinese_score = 1.0 if not non_chinese_kol and not non_chinese_photo else 0.0
+            
+        # Combined score with higher weight for Chinese match
+        match_score = (chinese_score * 0.6) + (non_chinese_score * 0.4)
+        
+        logger.debug(f"Match scores for '{original_name}':")
+        logger.debug(f"  Chinese score: {chinese_score:.2f}")
+        logger.debug(f"  Non-Chinese score: {non_chinese_score:.2f}")
+        logger.debug(f"  Combined score: {match_score:.2f}")
         
         # Update best match if this score is higher
-        if match_score > best_match_score and match_score > 0.8:  # Increased threshold to 80%
+        if match_score > best_match_score and match_score > 0.7:  # Require at least 70% match
             best_match = original_name
             best_match_score = match_score
 
@@ -200,6 +207,7 @@ def api_kols():
             if photo_file:
                 logger.warning(f"⚠ Photo '{photo_file}' already used - skipping for '{kol_nickname}'")
             photo_url = 'https://via.placeholder.com/300x400?text=No+Photo'
+            logger.warning(f"✗ No photo found for: '{kol_nickname}'")
             
         kol = row.to_dict()
         kol['Photo'] = photo_url
