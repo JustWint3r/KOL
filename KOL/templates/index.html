@@ -983,15 +983,10 @@
         kols.forEach(kol => {
             const card = document.createElement('div');
             card.className = 'kol-card';
-            // Use the image path as-is, ensuring proper URL encoding
+            // Use the image path as-is from the backend
             let photoUrl = kol.Photo;
-            if (photoUrl) {
-                // Extract the filename from the URL
-                const filename = photoUrl.split('/').pop();
-                // Encode only the filename
-                const encodedFilename = encodeURIComponent(filename);
-                const finalUrl = `/static/KOL_Picture/${encodedFilename}`;
-                card.style.backgroundImage = `url('${finalUrl}')`;
+            if (photoUrl && !photoUrl.includes('placeholder')) {
+                card.style.backgroundImage = `url('${photoUrl}')`;
             }
             // Calculate normalized values
             const followers = typeof kol.Followers === 'number' ? kol.Followers : parseInt(kol.Followers.toString().replace(/,/g, ''));
