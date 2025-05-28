@@ -34,11 +34,9 @@ def clean_text(text):
     return str(text).strip().replace('\n', ' ')
 
 def normalize_name(name):
-    """Normalize name by removing extension, converting to lowercase, and trimming spaces."""
+    """Normalize name by removing extension and trimming spaces."""
     # Remove file extension and any spaces before it
-    name = name.lower().replace(' .png', '.png').replace('.png', '')
-    # Remove special characters except letters, numbers, spaces, and Chinese characters
-    name = re.sub(r'[^\w\s\u4e00-\u9fff]', '', name)
+    name = name.replace(' .png', '.png').replace('.png', '')
     # Remove extra spaces and trim
     return ' '.join(name.split())
 
@@ -51,40 +49,36 @@ def clean_name_for_matching(name):
     # Remove extra spaces and convert to lowercase
     return ' '.join(name.lower().split())
 
-def find_matching_photo(kol_name, photo_dict):
-    """Find matching photo using exact or partial matching."""
-    normalized_kol_name = normalize_name(kol_name)
+def find_matching_photo(kol_name, photo_files):
+    """Find matching photo using exact name matching."""
     logger.info(f"\n=== Matching process for KOL: '{kol_name}' ===")
-    logger.info(f"Normalized name: '{normalized_kol_name}'")
     
-    # Try exact match first
-    if normalized_kol_name in photo_dict:
-        matched_file = photo_dict[normalized_kol_name]
-        logger.info(f"✓ Found exact match: '{matched_file}'")
-        return matched_file
+    # Try exact match first (case-sensitive, with space before .png)
+    exact_matches = [
+        f"{kol_name}.png",
+        f"{kol_name} .png"
+    ]
     
-    # Try case-insensitive match with original name
-    for norm_filename, original_filename in photo_dict.items():
-        if normalized_kol_name == normalize_name(original_filename):
-            logger.info(f"✓ Found normalized match: '{original_filename}'")
-            return original_filename
+    logger.info(f"Trying exact matches: {exact_matches}")
+    for match in exact_matches:
+        if match in photo_files:
+            logger.info(f"✓ Found exact match: '{match}'")
+            return match
     
-    # Try partial match (both ways)
-    for norm_filename, original_filename in photo_dict.items():
-        # Check if all words in KOL name are in filename
-        kol_words = set(normalized_kol_name.split())
-        filename_words = set(norm_filename.split())
-        
-        if kol_words.issubset(filename_words) or filename_words.issubset(kol_words):
-            logger.info(f"✓ Found partial word match: '{original_filename}'")
-            return original_filename
-            
-    # Log all available names for debugging
-    logger.info("Available normalized names:")
-    for norm_name, orig_name in sorted(photo_dict.items()):
-        logger.info(f"  '{norm_name}' -> '{orig_name}'")
+    # Try case-insensitive match
+    kol_lower = kol_name.lower()
+    for photo in photo_files:
+        photo_name = photo.replace(' .png', '.png').replace('.png', '').lower()
+        if kol_lower == photo_name:
+            logger.info(f"✓ Found case-insensitive match: '{photo}'")
+            return photo
     
-    logger.warning(f"✗ No match found for '{kol_name}' (normalized: '{normalized_kol_name}')")
+    # Log all files for debugging
+    logger.info("Available files:")
+    for f in sorted(photo_files):
+        logger.info(f"  '{f}'")
+    
+    logger.warning(f"✗ No match found for '{kol_name}'")
     return None
 
 @app.route('/')
@@ -113,13 +107,10 @@ def api_kols():
         photo_files = [f for f in os.listdir(photo_dir) if f.lower().endswith('.png')]
         logger.info(f"\nFound {len(photo_files)} PNG files in {photo_dir}")
         
-        # Build dictionary mapping normalized names to original filenames
-        photo_dict = {normalize_name(f): f for f in photo_files}
-        
-        # Log the mapping for debugging
-        logger.info("\nPhoto name mapping:")
-        for norm_name, orig_name in sorted(photo_dict.items()):
-            logger.info(f"  '{norm_name}' -> '{orig_name}'")
+        # Log all files for debugging
+        logger.info("\nAll available files:")
+        for f in sorted(photo_files):
+            logger.info(f"  '{f}'")
 
         # Track used photos to prevent duplicates
         used_photos = set()
@@ -127,8 +118,8 @@ def api_kols():
         # Process each KOL
         kols = []
         for _, row in df.iterrows():
-            kol_nickname = row['KOL Nickname']
-            available_photos = {k: v for k, v in photo_dict.items() if v not in used_photos}
+            kol_nickname = row['KOL Nickname'].strip()
+            available_photos = [f for f in photo_files if f not in used_photos]
             photo_file = find_matching_photo(kol_nickname, available_photos)
             
             if photo_file:
