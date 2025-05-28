@@ -37,6 +37,8 @@ def normalize_name(name):
     """Normalize name by removing extension, converting to lowercase, and trimming spaces."""
     # Remove file extension and any spaces before it
     name = name.lower().replace(' .png', '.png').replace('.png', '')
+    # Remove special characters except letters, numbers, spaces, and Chinese characters
+    name = re.sub(r'[^\w\s\u4e00-\u9fff]', '', name)
     # Remove extra spaces and trim
     return ' '.join(name.split())
 
@@ -60,14 +62,29 @@ def find_matching_photo(kol_name, photo_dict):
         matched_file = photo_dict[normalized_kol_name]
         logger.info(f"✓ Found exact match: '{matched_file}'")
         return matched_file
-        
-    # Try partial match
+    
+    # Try case-insensitive match with original name
     for norm_filename, original_filename in photo_dict.items():
-        if normalized_kol_name in norm_filename or norm_filename in normalized_kol_name:
-            logger.info(f"✓ Found partial match: '{original_filename}'")
+        if normalized_kol_name == normalize_name(original_filename):
+            logger.info(f"✓ Found normalized match: '{original_filename}'")
+            return original_filename
+    
+    # Try partial match (both ways)
+    for norm_filename, original_filename in photo_dict.items():
+        # Check if all words in KOL name are in filename
+        kol_words = set(normalized_kol_name.split())
+        filename_words = set(norm_filename.split())
+        
+        if kol_words.issubset(filename_words) or filename_words.issubset(kol_words):
+            logger.info(f"✓ Found partial word match: '{original_filename}'")
             return original_filename
             
-    logger.warning(f"✗ No match found for '{kol_name}'")
+    # Log all available names for debugging
+    logger.info("Available normalized names:")
+    for norm_name, orig_name in sorted(photo_dict.items()):
+        logger.info(f"  '{norm_name}' -> '{orig_name}'")
+    
+    logger.warning(f"✗ No match found for '{kol_name}' (normalized: '{normalized_kol_name}')")
     return None
 
 @app.route('/')
@@ -101,7 +118,7 @@ def api_kols():
         
         # Log the mapping for debugging
         logger.info("\nPhoto name mapping:")
-        for norm_name, orig_name in photo_dict.items():
+        for norm_name, orig_name in sorted(photo_dict.items()):
             logger.info(f"  '{norm_name}' -> '{orig_name}'")
 
         # Track used photos to prevent duplicates
