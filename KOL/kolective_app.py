@@ -43,7 +43,7 @@ def normalize_name(name):
     if any('\u4e00' <= char <= '\u9fff' for char in name):
         # For Chinese names, keep the characters as is
         return name
-    # For non-Chinese names, only keep alphanumeric
+    # For non-Chinese names, only keep alphanumeric and convert to lowercase
     name = re.sub(r'[^a-z0-9]', '', name)
     logger.debug(f"Normalized name: '{name}'")
     return name
@@ -157,7 +157,7 @@ def api_kols():
     photo_dir = os.path.join(base_dir, 'static', 'KOL_Picture')
     photo_files = {}  # Normalized names to normalized filenames
     original_files = {}  # Normalized names to original filenames
-    valid_extensions = {'.jpg', '.jpeg', '.png'}
+    valid_extensions = {'.png'}  # Only allow PNG files
     
     try:
         logger.info(f"\nScanning directory: {photo_dir}")
@@ -179,7 +179,7 @@ def api_kols():
                     original_files[normalized_name] = filename
                     logger.info(f"Indexed image: '{filename}' -> '{normalized_name}'")
         
-        logger.info(f"Successfully indexed {len(photo_files)} valid images")
+        logger.info(f"Successfully indexed {len(photo_files)} valid PNG images")
     except Exception as e:
         logger.error(f"Error reading photo directory: {str(e)}")
         return jsonify({"error": f"Failed to read photo directory: {str(e)}"}), 500
